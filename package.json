@@ -1,0 +1,15 @@
+{
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.10",
+    "gifenc": "^1.0.3",
+    "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/pngjs": "^6.0.5"
+  }
+}

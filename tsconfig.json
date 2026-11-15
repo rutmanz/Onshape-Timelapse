@@ -1,0 +1,16 @@
+{
+    "compilerOptions": {
+        "target": "esnext",
+        "module": "esnext",
+        "moduleResolution": "bundler",
+        "strict": true,
+        "skipLibCheck": false,
+        "esModuleInterop": true,
+        "noEmit": true,
+        "types": ["node"],
+        "forceConsistentCasingInFileNames": true,
+        "resolveJsonModule": true,
+        "experimentalDecorators": true,
+        "emitDecoratorMetadata": true,
+    }
+}
