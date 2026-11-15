@@ -27,18 +27,8 @@ const key = btoa(`${ACCESS_KEY}:${SECRET_KEY}`)
 
 
 async function getImage(microversion: string): Promise<null | string> {
-	const resp = await fetch(`https://cad.onshape.com/api/v17/assemblies/d/${DOCUMENT}/m/${microversion}/e/${ASSEMBLY}/shadedviews?viewMatrix=isometric&outputHeight=600&outputWidth=600&pixelSize=0.003&edges=show&showAllParts=false&includeSurfaces=true&useAntiAliasing=false&includeWires=false`, {
-		headers: {
-			Accept: "application/json",
-			Authorization: "Basic " + key,
-		},
-	})
-	if (!resp.ok) {
-		console.error("Image fetch failed", resp.statusText, await resp.text())
-		return null
-	}
-	const body = await resp.json()
-	if (body.images == null || body.images.length < 1) {
+	const body = await onshapeFetch(`https://cad.onshape.com/api/v17/assemblies/d/${DOCUMENT}/m/${microversion}/e/${ASSEMBLY}/shadedviews?viewMatrix=isometric&outputHeight=600&outputWidth=600&pixelSize=0.003&edges=show&showAllParts=false&includeSurfaces=true&useAntiAliasing=false&includeWires=false`)
+	if (body?.images == null || body.images.length < 1) {
 		return null
 	}
 	return body.images[0];
@@ -51,8 +41,27 @@ interface Version {
 	microversion: string
 }
 
-async function getVersions(): Promise<Version[]> {
-	const resp = await fetch(`https://cad.onshape.com/api/v17/documents/d/${DOCUMENT}/versions?offset=0&limit=0`, {
+interface MicroVersion {
+	date: string,
+	nextMicroversionId: string,
+	canBeRestored: boolean,
+	description: string,
+	userId: string,
+	microversionId: string,
+	username: string
+}
+
+const MS_PER_DAY = 86400000;
+function dateToBucket(date: Date) {
+	const utcDays = Math.floor(
+		(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())) / MS_PER_DAY
+	);
+	return utcDays;
+}
+
+
+async function onshapeFetch(url: string): Promise<any | null> {
+	const resp = await fetch(url, {
 		headers: {
 			accept: "application/json",
 			authorization: "Basic " + key,
@@ -60,26 +69,46 @@ async function getVersions(): Promise<Version[]> {
 	})
 	if (!resp.ok) {
 		console.error("Fetch failed", resp.status, resp.statusText, await resp.text())
-		return []
+		console.log(url)
+		return null
 	}
-	const body = await resp.json()
-	const versions: Version[] = []
-	body.forEach((version: any) => {
-		const creationDate = new Date(version.createdAt)
-		if (versions.length > 0 && versions[versions.length - 1].createdAt.toLocaleDateString() == creationDate.toLocaleDateString()) {
-			const old = versions.pop(); // Replace with newer version
-			console.log("Replacing", old?.name, "with", version.name, "for", creationDate.toLocaleDateString())
-		}
-		versions.push({
-			name: version.name,
-			createdAt: creationDate,
-			microversion: version.microversion
-		});
-	});
-	return versions;
+	return await resp.json()
 }
 
-function toSlideshow(images: string[], delayMs = 500): Uint8Array|null  {
+async function getVersions(): Promise<Version[]> {
+	const body = await onshapeFetch(`https://cad.onshape.com/api/v17/documents/d/${DOCUMENT}/versions?offset=0&limit=0`)
+	if (body == null) {
+		return []
+	}
+	// console.log(body)
+	const versions = new Map<number, Version>()
+	const microversionData = await Promise.all(body.map(async (version: any) => {
+		console.log("fetching micros for", version.name)
+		const v: MicroVersion[] = await onshapeFetch(`https://cad.onshape.com/api/v17/documents/d/${DOCUMENT}/m/${version.microversion}/documenthistory`)
+		console.log("fetched micros for", version.name)
+		return { version, microversions: v }
+	}))
+	for (const data of microversionData) {
+		const microversions: MicroVersion[] = data.microversions
+		for (const microversion of microversions.reverse()) {
+			const date = new Date(microversion.date)
+			const bucket = dateToBucket(date)
+			const existing = versions.get(bucket)
+			if (existing == null || existing.createdAt.getTime() < date.getTime()) {
+				versions.set(bucket, {
+					name: data.version.name,
+					microversion: microversion.microversionId,
+					createdAt: date,
+				})
+			}
+
+		}
+
+	}
+	return [...versions.values()];
+}
+
+function toSlideshow(images: string[], delayMs = 500): Uint8Array | null {
 	if (images.length === 0) return null
 
 	const gif = GIFEncoder();
@@ -88,7 +117,7 @@ function toSlideshow(images: string[], delayMs = 500): Uint8Array|null  {
 
 	images.forEach((b64) => {
 		const png = PNG.sync.read(Buffer.from(b64, "base64"));
-		
+
 		const palette = quantize(png.data, 256);
 		const index = applyPalette(png.data, palette);
 		gif.writeFrame(index, width, height, { palette, delay: delayMs });
@@ -100,10 +129,10 @@ function toSlideshow(images: string[], delayMs = 500): Uint8Array|null  {
 
 async function main() {
 	const versions = await getVersions()
-	await fs.mkdir("./img").catch(() => {})
-	if (SAVE_FRAMES) await fs.mkdir(`./img/${DOCUMENT}/${ASSEMBLY}/`, { recursive: true }).catch(() => {})
+	console.log(versions)
+	await fs.mkdir("./img").catch(() => { })
+	if (SAVE_FRAMES) await fs.mkdir(`./img/${DOCUMENT}/${ASSEMBLY}/`, { recursive: true }).catch(() => { })
 	console.log("Rendering images...")
-
 	let complete = 0;
 	const promises = versions.map(async (version) => {
 		console.log("fetching render for", version.name, version.createdAt.toLocaleDateString())
@@ -119,10 +148,10 @@ async function main() {
 
 	if (SAVE_GIF) {
 
-	const gif = toSlideshow(images.filter((img) => img != null), GIF_FRAME_DURATION_MS)
-	if (gif != null) {
-		await fs.writeFile(`./img/${DOCUMENT}_${ASSEMBLY}.gif`, gif)
-	}
+		const gif = toSlideshow(images.filter((img) => img != null), GIF_FRAME_DURATION_MS)
+		if (gif != null) {
+			await fs.writeFile(`./img/${DOCUMENT}_${ASSEMBLY}.gif`, gif)
+		}
 	}
 }
 
